@@ -4,7 +4,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
-	"github.com/shimanekb/project1a/store"
+	"github.com/shimanekb/project1-B/store"
 	log "github.com/sirupsen/logrus"
 	"io"
 	"os"

@@ -11,6 +11,23 @@ type Cache interface {
 	Remove(key string)
 }
 
+type SimpleCache struct {
+	KvMap map[string]string
+}
+
+func (s *SimpleCache) Add(key string, value string) {
+	s.KvMap[key] = value
+}
+
+func (s *SimpleCache) Get(key string) (value string, ok bool) {
+	value, ok = s.KvMap[key]
+	return value, ok
+}
+
+func (s *SimpleCache) Remove(key string) {
+	delete(s.KvMap, key)
+}
+
 type LruCache struct {
 	Lru *lru.ARCCache
 }
@@ -34,4 +51,9 @@ func NewLruCache() (Cache, error) {
 	var cache *lru.ARCCache
 	cache, err := lru.NewARC(1000)
 	return &LruCache{cache}, err
+}
+
+func NewSimpleCache() (Cache, error) {
+	kvMap := make(map[string]string)
+	return &SimpleCache{kvMap}, nil
 }

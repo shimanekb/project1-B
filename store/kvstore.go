@@ -153,7 +153,7 @@ func NewKvStore() *KvStore {
 	}
 	log.Info("Created storage directory.")
 
-	cache, cErr := NewLruCache()
+	cache, cErr := NewSimpleCache()
 
 	if cErr != nil {
 		log.Fatal("Could not create cache for kv store.")
