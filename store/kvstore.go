@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 )
 
 const (
@@ -28,10 +27,16 @@ type KvStore struct {
 }
 
 func (k KvStore) Put(key string, value string) error {
-	k.Cache.Add(key, value)
 	path := filepath.Join(".", STORAGE_DIR)
 	path = filepath.Join(path, STORAGE_FILE)
-	return WritePut(path, key, value)
+	offset, err := WritePut(path, key, value)
+	if err != nil {
+		return err
+	}
+
+	k.Cache.Add(key, offset)
+
+	return nil
 }
 
 func (k KvStore) Get(key string) (value string, err error) {
@@ -41,23 +46,35 @@ func (k KvStore) Get(key string) (value string, err error) {
 		return "", errors.New("Unable to find offset in cache.")
 	}
 
+	off, check := offset.(int64)
+	if !check {
+		return "", errors.New("Offset is in inproper format.")
+	}
 	path := filepath.Join(".", STORAGE_DIR)
 	path = filepath.Join(path, STORAGE_FILE)
-	offsetconv, convErr := strconv.Atoi(offset)
-	if convErr != nil {
-		return "", convErr
-	}
 
-	value, err = ReadGet(path, int64(offsetconv))
+	value, err = ReadGet(path, off)
 
 	return value, err
 }
 
 func (k KvStore) Del(key string) error {
+	offset, ok := k.Cache.Get(key)
 	k.Cache.Remove(key)
-	path := filepath.Join(".", STORAGE_DIR)
-	path = filepath.Join(path, STORAGE_FILE)
-	return WriteDel(path, key)
+	off, check := offset.(int64)
+	if !check {
+		return errors.New("Offset is in inproper format.")
+	}
+
+	if ok {
+		log.Infof("Delete called for key %s, and offset %s", key, offset)
+		path := filepath.Join(".", STORAGE_DIR)
+		path = filepath.Join(path, STORAGE_FILE)
+
+		return WriteDel(path, off)
+	}
+
+	return nil
 }
 
 func NewKvStore() *KvStore {
@@ -89,16 +106,22 @@ func NewKvStore() *KvStore {
 	return &KvStore{cache}
 }
 
-func WritePut(filePath string, key string, value string) error {
+func WritePut(filePath string, key string, value string) (offset int64, err error) {
 	file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
 
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	_, write_err := file.WriteString(fmt.Sprintf("%s,%s\n", key, value))
+	length, write_err := file.WriteString(fmt.Sprintf("%s,%s\n", key, value))
+	fi, statErr := file.Stat()
+	if statErr != nil {
+		return 0, statErr
+	}
+
+	offset = fi.Size() - int64(length)
 	file.Close()
-	return write_err
+	return offset, write_err
 }
 
 func ReadGet(filePath string, offset int64) (string, error) {
@@ -128,56 +151,56 @@ func ReadGet(filePath string, offset int64) (string, error) {
 	return value, nil
 }
 
-func WriteDel(filePath string, key string) error {
-
-	tmpPath := filepath.Join(".", STORAGE_DIR)
-	tmpPath = filepath.Join(tmpPath, "tmp_delete.csv")
-
+func WriteDel(filePath string, offset int64) error {
 	storeFile, openErr := os.Open(filePath)
-	reader := csv.NewReader(storeFile)
 
 	if openErr != nil {
 		return openErr
 	}
 
-	log.Infoln("Reading persistent file for delete.")
-	for {
-		record, err := reader.Read()
-		if err == io.EOF {
-			log.Info("End of file reached.")
-			break
-		}
-
-		if err != nil {
-			return err
-		}
-
-		k := record[0]
-		v := record[1]
-
-		if key != k {
-			writeErr := WritePut(tmpPath, k, v)
-
-			if writeErr != nil {
-				return writeErr
-			}
-		} else {
-			log.Infof("Delete line found for key: %s", key)
-		}
+	_, seekErr := storeFile.Seek(offset, 0)
+	if seekErr != nil {
+		return openErr
 	}
 
-	log.Infof("Delete completed for key: %s", key)
-	storeFile.Close()
-	return SwapFile(filePath, tmpPath)
-}
+	reader := csv.NewReader(storeFile)
+	log.Infoln("Reading persistent file.")
+	record, err := reader.Read()
 
-func SwapFile(originalFilePath string, replacementFilePath string) error {
-	log.Infof("Swapping file %s with file %s", originalFilePath, replacementFilePath)
-	return os.Rename(replacementFilePath, originalFilePath)
+	if err != nil {
+		storeFile.Close()
+		return err
+	}
+
+	length := len(record[0]) + len(record[1]) + 2
+	storeFile.Close()
+
+	storeFile, openErr = os.OpenFile(filePath, os.O_WRONLY, 0644)
+
+	if openErr != nil {
+		return openErr
+	}
+
+	log.Infof("Read entry length %d", length)
+	var newString string = ","
+	for i := 2; i < length; i++ {
+		newString += " "
+	}
+	newString += "\n"
+	log.Infof("Created replacement string (empty) '%s'", newString)
+	_, seekErr = storeFile.Seek(0, io.SeekStart)
+	if seekErr != nil {
+		storeFile.Close()
+		return openErr
+	}
+
+	_, writeErr := storeFile.WriteAt([]byte(newString), offset)
+	storeFile.Close()
+	return writeErr
 }
 
 func LoadData(cache Cache, filePath string) (err error) {
-	storeFile, openErr := os.Open(filePath)
+	storeFile, openErr := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
 
 	if openErr != nil {
 		return openErr
@@ -205,7 +228,13 @@ func LoadData(cache Cache, filePath string) (err error) {
 		lineBytes, _ := buffer.ReadBytes('\n')
 		log.Infoln("Read line bytes.")
 		key := record[0]
-		cache.Add(key, strconv.FormatInt(position, 10))
+
+		if key != "" {
+			cache.Add(key, position)
+		} else {
+			log.Info("Empty line from delete detected, skipping.")
+		}
+
 		position += int64(len(lineBytes))
 	}
 

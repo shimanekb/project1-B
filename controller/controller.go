@@ -65,7 +65,7 @@ func ReadCsvCommands(filePath string, outputPath string) {
 }
 
 func WriteOutputFirstLine(outputPath string) error {
-	file, err := os.OpenFile(outputPath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
+	file, err := os.OpenFile(outputPath, os.O_TRUNC|os.O_WRONLY, 0644)
 
 	if err != nil {
 		return err
