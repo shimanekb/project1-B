@@ -1,6 +1,7 @@
 package kvstore
 
 import (
+	"bytes"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 const (
@@ -33,16 +35,20 @@ func (k KvStore) Put(key string, value string) error {
 }
 
 func (k KvStore) Get(key string) (value string, err error) {
-	val, ok := k.Cache.Get(key)
+	offset, ok := k.Cache.Get(key)
 
-	if ok {
-		value = val
-		err = nil
-	} else {
-		path := filepath.Join(".", STORAGE_DIR)
-		path = filepath.Join(path, STORAGE_FILE)
-		value, err = ReadGet(path, key)
+	if ok != true {
+		return "", errors.New("Unable to find offset in cache.")
 	}
+
+	path := filepath.Join(".", STORAGE_DIR)
+	path = filepath.Join(path, STORAGE_FILE)
+	offsetconv, convErr := strconv.Atoi(offset)
+	if convErr != nil {
+		return "", convErr
+	}
+
+	value, err = ReadGet(path, int64(offsetconv))
 
 	return value, err
 }
@@ -72,6 +78,14 @@ func NewKvStore() *KvStore {
 		log.Fatal("Could not create cache for kv store.")
 	}
 
+	path := filepath.Join(".", STORAGE_DIR)
+	path = filepath.Join(path, STORAGE_FILE)
+	loadErr := LoadData(cache, path)
+
+	if loadErr != nil {
+		log.Fatal("Could not load data into offset cache.")
+	}
+
 	return &KvStore{cache}
 }
 
@@ -87,36 +101,31 @@ func WritePut(filePath string, key string, value string) error {
 	return write_err
 }
 
-func ReadGet(filePath string, key string) (string, error) {
+func ReadGet(filePath string, offset int64) (string, error) {
 	storeFile, openErr := os.Open(filePath)
-	reader := csv.NewReader(storeFile)
 
 	if openErr != nil {
 		return "", openErr
 	}
 
-	log.Infoln("Reading persistent file.")
-	for {
-		record, err := reader.Read()
-		if err == io.EOF {
-			break
-		}
-
-		if err != nil {
-			storeFile.Close()
-			return "", err
-		}
-
-		k := record[0]
-		v := record[1]
-
-		if key == k {
-			storeFile.Close()
-			return v, nil
-		}
+	_, seekErr := storeFile.Seek(offset, 0)
+	if seekErr != nil {
+		return "", openErr
 	}
 
-	return "", errors.New(fmt.Sprintf("Could not find value for key %s", key))
+	reader := csv.NewReader(storeFile)
+	log.Infoln("Reading persistent file.")
+	record, err := reader.Read()
+
+	if err != nil {
+		storeFile.Close()
+		return "", err
+	}
+
+	value := record[1]
+	storeFile.Close()
+
+	return value, nil
 }
 
 func WriteDel(filePath string, key string) error {
@@ -165,4 +174,41 @@ func WriteDel(filePath string, key string) error {
 func SwapFile(originalFilePath string, replacementFilePath string) error {
 	log.Infof("Swapping file %s with file %s", originalFilePath, replacementFilePath)
 	return os.Rename(replacementFilePath, originalFilePath)
+}
+
+func LoadData(cache Cache, filePath string) (err error) {
+	storeFile, openErr := os.Open(filePath)
+
+	if openErr != nil {
+		return openErr
+	}
+
+	var buffer bytes.Buffer
+	var position int64
+	reader := io.TeeReader(storeFile, &buffer)
+	csvReader := csv.NewReader(reader)
+
+	log.Infoln("Reading persistent file into cache with offsets.")
+	for {
+		record, readErr := csvReader.Read()
+		if readErr == io.EOF {
+			log.Info("End of file reached.")
+			break
+		}
+
+		if err != nil {
+			err = readErr
+			break
+		}
+
+		log.Infoln("Reading line bytes.")
+		lineBytes, _ := buffer.ReadBytes('\n')
+		log.Infoln("Read line bytes.")
+		key := record[0]
+		cache.Add(key, strconv.FormatInt(position, 10))
+		position += int64(len(lineBytes))
+	}
+
+	log.Infoln("Successfully Read persistent file into cache with offsets.")
+	return err
 }
