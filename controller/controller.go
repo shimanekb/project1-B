@@ -35,7 +35,7 @@ func ReadCsvCommands(filePath string, outputPath string) {
 	log.Infof("Creating output file.")
 	outErr := WriteOutputFirstLine(outputPath)
 	if outErr != nil {
-		log.Fatal("Could not create output file")
+		log.Fatal("Could not create output file", outErr)
 	}
 
 	reader := csv.NewReader(csv_file)
@@ -65,8 +65,7 @@ func ReadCsvCommands(filePath string, outputPath string) {
 }
 
 func WriteOutputFirstLine(outputPath string) error {
-	file, err := os.OpenFile(outputPath, os.O_TRUNC|os.O_WRONLY, 0644)
-
+	file, err := os.OpenFile(outputPath, os.O_TRUNC|os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return err
 	}
