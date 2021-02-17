@@ -23,7 +23,8 @@ type Store interface {
 }
 
 type KvStore struct {
-	Cache Cache
+	Cache      Cache
+	IndexCache Cache
 }
 
 func (k KvStore) Put(key string, value string) error {
@@ -34,33 +35,41 @@ func (k KvStore) Put(key string, value string) error {
 		return err
 	}
 
-	k.Cache.Add(key, offset)
+	k.IndexCache.Add(key, offset)
+	k.Cache.Add(key, value)
 
 	return nil
 }
 
 func (k KvStore) Get(key string) (value string, err error) {
-	offset, ok := k.Cache.Get(key)
+	v, ok := k.Cache.Get(key)
 
-	if ok != true {
-		return "", errors.New("Unable to find offset in cache.")
+	if ok == false {
+		offset, ok := k.IndexCache.Get(key)
+
+		if ok != true {
+			return "", errors.New("Unable to find offset in cache.")
+		}
+
+		off, check := offset.(int64)
+		if !check {
+			return "", errors.New("Offset is in inproper format.")
+		}
+		path := filepath.Join(".", STORAGE_DIR)
+		path = filepath.Join(path, STORAGE_FILE)
+
+		value, err = ReadGet(path, off)
+	} else {
+		value = fmt.Sprintf("%v", v)
 	}
-
-	off, check := offset.(int64)
-	if !check {
-		return "", errors.New("Offset is in inproper format.")
-	}
-	path := filepath.Join(".", STORAGE_DIR)
-	path = filepath.Join(path, STORAGE_FILE)
-
-	value, err = ReadGet(path, off)
 
 	return value, err
 }
 
 func (k KvStore) Del(key string) error {
-	offset, ok := k.Cache.Get(key)
+	offset, ok := k.IndexCache.Get(key)
 	k.Cache.Remove(key)
+	k.IndexCache.Remove(key)
 	off, check := offset.(int64)
 	if !check {
 		return errors.New("Offset is in inproper format.")
@@ -89,7 +98,7 @@ func NewKvStore() *KvStore {
 	}
 	log.Info("Created storage directory.")
 
-	cache, cErr := NewSimpleCache()
+	indexCache, cErr := NewSimpleCache()
 
 	if cErr != nil {
 		log.Fatal("Could not create cache for kv store.")
@@ -97,13 +106,15 @@ func NewKvStore() *KvStore {
 
 	path := filepath.Join(".", STORAGE_DIR)
 	path = filepath.Join(path, STORAGE_FILE)
-	loadErr := LoadData(cache, path)
+	loadErr := LoadData(indexCache, path)
 
 	if loadErr != nil {
 		log.Fatal("Could not load data into offset cache.")
 	}
 
-	return &KvStore{cache}
+	cache, _ := NewLruCache()
+
+	return &KvStore{cache, indexCache}
 }
 
 func WritePut(filePath string, key string, value string) (offset int64, err error) {
